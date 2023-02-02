@@ -15,10 +15,18 @@ if t.TYPE_CHECKING:
 __all__: t.Sequence[str] = ("FunctionalComponent",)
 
 P = typing_extensions.ParamSpec("P")
-T = t.TypeVar("T", bound="base.CallbackComponent")
+T_co = t.TypeVar("T_co", bound="base.CallbackComponent", covariant=True)
 
 
-class FunctionalComponent(abc.ABC, t.Generic[T]):
+class ComponentTypeProto(t.Protocol[P, T_co]):
+    def __new__(cls, *args: P.args, **kwargs: P.kwargs) -> T_co:
+        ...
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T_co:
+        ...
+
+
+class FunctionalComponent(abc.ABC, t.Generic[T_co]):
     """
     Decorator to wrap a component function callback so it can be treated as a
     class internally. This should be inherited to create decorators for
@@ -29,7 +37,7 @@ class FunctionalComponent(abc.ABC, t.Generic[T]):
     # Just trust that it works.
     def __call__(
         self, callback_: t.Callable[typing_extensions.Concatenate[context.MessageContext, P], t.Any]
-    ) -> t.Callable[P, T]:
+    ) -> type[ComponentTypeProto[P, T_co]]:
         """
         Create and return proxy class for `callback`.
         """
@@ -59,7 +67,7 @@ class FunctionalComponent(abc.ABC, t.Generic[T]):
 
     @property
     @abc.abstractmethod
-    def component_type(self) -> type[T]:
+    def component_type(self) -> type[T_co]:
         """The component type."""
 
     @property
