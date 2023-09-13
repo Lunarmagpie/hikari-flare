@@ -31,10 +31,10 @@ class Converter(abc.ABC, t.Generic[T]):
         import hikari
 
         class IntConverter(flare.Converter[int]):
-            async def to_str(self, obj: int) -> str:
+            def to_str(self, obj: int) -> str | t.Awaitable[str]:
                 return str(obj)
 
-            async def from_str(self, obj: str) -> int:
+            def from_str(self, obj: str) -> tuple[str, int | t.Awaitable[int]]:
                 return int(obj)
 
         flare.add_converter(int, IntConverter)
@@ -62,12 +62,24 @@ class Converter(abc.ABC, t.Generic[T]):
         self.type = type
 
     @abc.abstractmethod
-    async def to_str(self, obj: T) -> str:
-        ...
+    def to_str(self, obj: T) -> str | t.Awaitable[str]:
+        """
+        Convert an object to a string. Return an awaitable if this needs to be done
+        asyncronously.
+        """
 
     @abc.abstractmethod
-    async def from_str(self, obj: str) -> T:
-        ...
+    def from_str(self, obj: str) -> tuple[str, T | t.Awaitable[T]]:
+        """
+        Convert a string to this object.
+
+        Returns:
+            tuple[str, T | t.Awaitable[T]]:
+                The first argument of the function is the remaining characters of the
+                string after this element was parsed.
+                The second element of the tuple is the parsed object. This object can be
+                awaitable if something asyncrounous needs to be done to the data.
+        """
 
 
 _converters: dict[t.Any, tuple[type[Converter[t.Any]], bool]] = {}
@@ -130,44 +142,52 @@ def get_converter(type_: t.Any) -> Converter[t.Any]:
 
 
 class IntConverter(Converter[int]):
-    async def to_str(self, obj: int) -> str:
+    def to_str(self, obj: int) -> str | t.Awaitable[str]:
         byte_length = obj.bit_length() // 8 + 1
-        return obj.to_bytes(byte_length, "little").decode("latin1")
+        return get_converter(str).to_str(obj.to_bytes(byte_length, "little").decode("latin1"))
 
-    async def from_str(self, obj: str) -> int:
-        return self.type.from_bytes(obj.encode("latin1"), "little")
+    def from_str(self, obj: str) -> tuple[str, int]:
+        remaining, obj = get_converter(str).from_str(obj)  # type: ignore
+        return remaining, self.type.from_bytes(obj.encode("latin1"), "little")
 
 
 class FloatConverter(Converter[float]):
-    async def to_str(self, obj: float) -> str:
+    def to_str(self, obj: float) -> str:
         return struct.pack("d", obj).decode("latin1")
 
-    async def from_str(self, obj: str) -> float:
-        return struct.unpack("d", obj.encode("latin1"))[0]
+    def from_str(self, obj: str) -> tuple[str, float]:
+        obj, remaining = obj[:2], obj[2:]
+        return remaining, struct.unpack("d", obj.encode("latin1"))[0]
 
 
 class StringConverter(Converter[str]):
-    async def to_str(self, obj: str) -> str:
-        return obj
+    def to_str(self, obj: str) -> str:
+        length = len(obj)
+        byte_length = length.to_bytes(4, "little").decode("latin1")
+        return byte_length + obj
 
-    async def from_str(self, obj: str) -> str:
-        return obj
+    def from_str(self, obj: str) -> tuple[str, str]:
+        length = int.from_bytes(obj[0].encode("latin1"), "little")
+        string, remaining = obj[1 : length + 1], obj[length + 1 :]
+        return remaining, string
 
 
 class EnumConverter(Converter[enum.Enum]):
-    async def to_str(self, obj: enum.Enum) -> str:
-        return await get_converter(int).to_str(obj.value)
+    def to_str(self, obj: enum.Enum) -> str | t.Awaitable[str]:
+        return get_converter(int).to_str(obj.value)
 
-    async def from_str(self, obj: str) -> enum.Enum:
-        return self.type(get_converter(int).from_str(obj))  # type: ignore
+    def from_str(self, obj: str) -> tuple[str, enum.Enum]:
+        remaining, enum = get_converter(int).from_str(obj)
+        return remaining, self.type(enum)  # type: ignore
 
 
 class BoolConverter(Converter[bool]):
-    async def to_str(self, obj: bool) -> str:
-        return "1" if obj else "0"
+    def to_str(self, obj: bool) -> str:
+        return "t" if obj else "f"
 
-    async def from_str(self, obj: str) -> bool:
-        return bool(int(obj))
+    def from_str(self, obj: str) -> tuple[str, bool]:
+        obj, remaining = obj[0], obj[1:]
+        return remaining, obj == "t"
 
 
 add_converter(float, FloatConverter, supports_subclass=True)
